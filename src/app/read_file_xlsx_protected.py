@@ -1,3 +1,5 @@
+import os
+
 import win32com.client
 import pandas as pd
 import re
@@ -34,7 +36,11 @@ def read_protected_excel(file_path_, sheet_name_):
     return df
 
 
-file_path = r"C:\Users\KNT21617\Downloads\newken\SpecList\(wz1j)WZ1J_Advanced_Spec_List_sq2 のコピー.xlsx"
-sheet_name = '1-SPEC'
-df = read_protected_excel(file_path, sheet_name)
-print(df)
+# file_path = os.path.join(os.getcwd(), r"..\..\data\raw\(pz1k)PZ1K_0-Phase_Spec_List_sq1 のコピー のコピー.xlsx")
+# file_path = r"C:\Users\KNT21617\Downloads\newken\project\data\raw\(wz1j)WZ1J_Advanced_Spec_List_sq2 のコピー.xlsx"
+# sheet_name = 2
+# df = read_protected_excel(file_path, sheet_name)
+# print(df)
+
+
+

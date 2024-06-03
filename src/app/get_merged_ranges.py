@@ -9,6 +9,6 @@ def get_merged_ranges(column, file_path_):
     return merged_ranges_in_column_a
 
 
-file_path = r'../../data/raw/input.xlsx'
+file_path = r"C:\Users\KNT21617\Downloads\newken\SpecList\spec_pz1k - Copy.xlsx"
 merged_ranges_in_column_A = get_merged_ranges(1, file_path)
 print("merged_ranges_in_column_A: ", merged_ranges_in_column_A)
