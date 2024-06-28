@@ -1,10 +1,14 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, create_engine, ForeignKeyConstraint
+import pandas as pd
+from sqlalchemy import ForeignKeyConstraint, Column, String, Integer, ForeignKey, create_engine, update, and_
+from .region1 import *
+from sqlalchemy import func
+import numpy as np
+from tests.convert_data_syo import *
+import mysql.connector
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, aliased
+import streamlit as st
 import decouple
 from hashlib import sha256
-from .region1 import *
-import numpy as np
-from ..app.convert_input_to_tuple import dataframe_convert
 
 Base = declarative_base()
 
@@ -167,7 +171,7 @@ def connect_db():
     database_url = decouple.config('DATABASE_URL')
     database_username = decouple.config('DATABASE_USERNAME')
     database_password = decouple.config('DATABASE_PASSWORD')
-    database_name = decouple.config('DATABASE_NAME')
+    database_name = decouple.config('DATABASE_NAME_SYO')
     str_connect = "mysql+mysqlconnector://" + database_username + ":" + database_password + "@" + database_url + "/" + database_name
     engine = create_engine(str_connect)
     return engine
@@ -175,7 +179,6 @@ def connect_db():
 
 def log_in(username, password):
     password = sha256(password.encode('utf-8')).hexdigest()
-    # engine = create_engine("mysql+mysqlconnector://test_user_1:Sql123456@10.192.85.133/db_21xe_clone")
     engine = connect_db()
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -188,15 +191,6 @@ def log_in(username, password):
         session.close()
         result = (username, None, None)
     return result
-
-
-def replace_symbol(input_text):
-    if isinstance(input_text, str):
-        for sym in ["<", ">", "\\", "!", "#", "$", "%", "^", "&", "[", "]"]:
-            input_text = input_text.replace(sym, "")
-        return input_text
-    else:
-        return input_text
 
 
 def frame_empty():
@@ -218,7 +212,6 @@ def querry_data(project_name):
         result_querry_region1 = session.query(InformationProject).all()
         df_1 = region_1(result_querry_region1)
 
-        # ORM Query
         querry_2 = session.query(ValueInf.parameter_name, Project.project_name, Config.config_name, ValueInf.value) \
             .join(Project, Project.project_id == ValueInf.project_id) \
             .join(Config, Config.config_id == ValueInf.config_id) \
@@ -226,29 +219,47 @@ def querry_data(project_name):
         result_querry_region2 = querry_2.all()
         df_2 = region_2(result_querry_region2)
         merged_df_1_2 = pd.merge(df_1, df_2, on='CADICS ID', how='inner')
-        #
-        result_querry_region3 = session.query(ValueInf.parameter_name, InformationProject.keyword,
-                                              InformationProject.group_infor, InformationProject.auto_infor,
-                                              Project.project_name, Config.config_name, ValueInf.value) \
-            .join(Project, Project.project_id == ValueInf.project_id) \
-            .join(Config, Config.config_id == ValueInf.config_id) \
-            .join(InformationProject, InformationProject.parameter_name == ValueInf.parameter_name) \
-            .filter(Project.project_name == project_name) \
-            .all()
-        # print("result_querry_region3:", result_querry_region3)
-        df_3 = region_3(result_querry_region3)
 
-        # Truy vấn với ORM
-        results_querry_region_4 = session.query(DeviceDetails.device_details_name, DeviceDetails.option_detail,
-                                                DeviceDetails.auto_detail,
-                                                DeviceDetails.group_detail, DeviceDetails.device_name,
-                                                Device.device_group) \
-            .join(Device, Device.device_name == DeviceDetails.device_name) \
-            .filter(Project.project_name == project_name) \
-            .all()
+        StatusDeviceDetailTB = session.query(
+            StatusConfigDeviceDetail.project_id,
+            Project.project_name,
+            StatusConfigDeviceDetail.device_details_id,
+            DeviceDetails.device_details_name,
+            DeviceDetails.device_name,
+            DeviceDetails.option_detail,
+            DeviceDetails.group_detail,
+            DeviceDetails.auto_detail
+        ).join(Project, Project.project_id == StatusConfigDeviceDetail.project_id) \
+            .join(DeviceDetails, DeviceDetails.device_details_id == StatusConfigDeviceDetail.device_details_id) \
+            .group_by(
+            StatusConfigDeviceDetail.device_details_id,
+            StatusConfigDeviceDetail.project_id
+        ).subquery()
+
+        DeviceProject = session.query(
+            ProjectDevice.project_id,
+            Project.project_name,
+            Device.device_name,
+            Device.device_group
+        ).join(Device, Device.device_name == ProjectDevice.device_name) \
+            .join(Project, Project.project_id == ProjectDevice.project_id) \
+            .subquery()
+
+        result_querry_region_4 = session.query(
+            DeviceProject.c.device_group,
+            DeviceProject.c.device_name,
+            StatusDeviceDetailTB.c.auto_detail,
+            StatusDeviceDetailTB.c.group_detail,
+            StatusDeviceDetailTB.c.option_detail,
+            StatusDeviceDetailTB.c.device_details_name
+        ).outerjoin(
+            StatusDeviceDetailTB,
+            (StatusDeviceDetailTB.c.device_name == DeviceProject.c.device_name) &
+            (StatusDeviceDetailTB.c.project_id == DeviceProject.c.project_id)
+        ).filter(DeviceProject.c.project_name == project_name).all()
         index_df_1 = df_1.index.max()
-        # print("results_querry_region_4: ", results_querry_region_4)
-        df_4, unique_list_max, unique_list_submax = region_4(results_querry_region_4, index_df_1)
+
+        df_4, unique_list_max, unique_list_submax = region_4(result_querry_region_4, index_df_1)
 
         results_querry_region_7 = session.query(
             Project.project_name,
@@ -269,20 +280,17 @@ def querry_data(project_name):
             Project.project_name == project_name
         ).all()
         index_df_4 = df_4.index.max()
-        # print("results_querry_region_7: ", results_querry_region_7)
-        df_7 = region_7(results_querry_region_7, index_df_4)
-        # merged_df_4_7 = pd.concat([merged_df_1_2, df_4, df_7], axis=0)
 
-        # Truy vấn ORM
+        df_7 = region_7(results_querry_region_7, index_df_4)
+
         querry_region_8 = session.query(
             Project.project_name,
             Config.config_name,
             DeviceDetails.device_details_name,
             DeviceDetails.group_detail,
             StatusConfigDeviceDetail.status
-        ).join(
-            DeviceDetails, StatusConfigDeviceDetail.device_details_id == DeviceDetails.device_details_id
-        ).join(
+        ).join(DeviceDetails, StatusConfigDeviceDetail.device_details_id == DeviceDetails.device_details_id
+               ).join(
             Project, StatusConfigDeviceDetail.project_id == Project.project_id
         ).join(
             Config, StatusConfigDeviceDetail.config_id == Config.config_id
@@ -291,7 +299,7 @@ def querry_data(project_name):
         )
 
         results_querry_region_8 = querry_region_8.all()
-        # print(results_querry_region_8)
+
         df_8 = region_8(results_querry_region_8)
         merged_df_4_8 = pd.merge(df_4, df_8, on=['gr', 'CADICS ID'], how='left')
         merged_df_4_8.set_index(df_4.index, inplace=True)
@@ -309,96 +317,1266 @@ def querry_data(project_name):
                              ).filter(Project.project_name == project_name).all()
         df_6 = region_6(results_querry_region_6)
         merged_df_1_2_4_6_7_8 = pd.merge(merged_df_1_2_4_7_8, df_6, on=['gr', 'CADICS ID'], how='left')
-        # merged_df_1_2_4_6_8.set_index(merged_df_1_2_4_8.index, inplace=True)
         session.close()
+        st.success(f'{project_name}: Completed')
         return merged_df_1_2_4_6_7_8, unique_list_max, unique_list_submax
     else:
         session.close()
         st.error("Project not found in the database.")
-        return frame_empty(), [], []
+        df_1, merged_df_4_optioncode, unique_list_max, unique_list_submax = update_and_querry_form_data()
+        merge_end = pd.concat([df_1, merged_df_4_optioncode], axis=0)
+        return merge_end, unique_list_max, unique_list_submax
 
 
-# def update_and_querry_form_data(project_name):
-#     project_name = project_name.upper()
-#     engine = connect_db()
-#     Base.metadata.create_all(engine)
-#     Session = sessionmaker(bind=engine)
-#     session = Session()
-#     all_project = [name[0] for name in session.query(Project.project_name).all()]
-#     if project_name in all_project:
-#         result_querry_region1 = session.query(InformationProject).all()
-#         df_1 = region_1(result_querry_region1)
-#
-#         # ORM Query
-#         querry_2 = session.query(ValueInf.parameter_name, Project.project_name, Config.config_name, ValueInf.value) \
-#             .join(Project, Project.project_id == ValueInf.project_id) \
-#             .join(Config, Config.config_id == ValueInf.config_id) \
-#             .filter(Project.project_name == project_name)
-#         result_querry_region2 = querry_2.all()
-#         df_2 = region_2(result_querry_region2)
-#         merged_df_1_2 = pd.merge(df_1, df_2, on='CADICS ID', how='inner')
-#
-#         results_querry_region_4 = session.query(DeviceDetails.device_details_name, DeviceDetails.option_detail,
-#                                                 DeviceDetails.auto_detail,
-#                                                 DeviceDetails.group_detail, DeviceDetails.device_name,
-#                                                 Device.device_group) \
-#             .join(Device, Device.device_name == DeviceDetails.device_name) \
-#             .filter(Project.project_name == project_name) \
-#             .all()
-#         index_df_1 = df_1.index.max()
-#         df_4, unique_list_max, unique_list_submax = region_4(results_querry_region_4, index_df_1)
-#
-#         results_querry_region_7 = session.query(
-#             Project.project_name,
-#             Config.config_name,
-#             Lot.lot_name,
-#             OptionCode.optioncode_value,
-#             StatusLotConfig.status
-#         ).join(
-#             StatusLotConfig, Project.project_id == StatusLotConfig.project_id
-#         ).join(
-#             Config, Config.config_id == StatusLotConfig.config_id
-#         ).join(
-#             OptionCode,
-#             (OptionCode.config_id == StatusLotConfig.config_id) & (OptionCode.project_id == StatusLotConfig.project_id)
-#         ).join(
-#             Lot, Lot.lot_id == StatusLotConfig.lot_id
-#         ).filter(
-#             Project.project_name == project_name
-#         ).all()
-#         index_df_4 = df_4.index.max()
-#         df_7 = region_7(results_querry_region_7, index_df_4)
-#         merged_df_4_7 = pd.concat([merged_df_1_2, df_4, df_7], axis=0)
-#         session.close()
-#         return merged_df_4_7, unique_list_max, unique_list_submax
-#     else:
-#         session.close()
-#         st.error("Project not found in the database.")
-#         return frame_empty(), [], []
-
-
-def update_and_querry_form_data(project_name, file_name):
-    project_name = project_name.upper()
+def update_and_querry_form_data():
     engine = connect_db()
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
-    all_project = [name[0] for name in session.query(Project.project_name).all()]
+    result_querry_region1 = session.query(InformationProject).all()
+    df_1 = region_1(result_querry_region1)
+    result_querry_region_4 = session.query(
+        Device.device_group,
+        Device.device_name,
+        DeviceDetails.auto_detail,
+        DeviceDetails.group_detail,
+        DeviceDetails.option_detail,
+        DeviceDetails.device_details_name
+    ).outerjoin(DeviceDetails, Device.device_name == DeviceDetails.device_name).all()
+    index_df_1 = df_1.index.max()
+    df_4, unique_list_max, unique_list_submax = region_4(result_querry_region_4, index_df_1)
+    result_querry_lot_name = session.query(Lot.lot_name).all()
+    result_querry_lot_name_full = [('OptionCode',)] + result_querry_lot_name
+
+    df_optioncode = pd.DataFrame(np.nan, index=range(len(result_querry_lot_name_full)),
+                                 columns=['auto', 'gr', 'keyword', 'CADICS ID'])
+
+    df_optioncode['CADICS ID'] = [t[0] for t in result_querry_lot_name_full]
+    df_optioncode = df_optioncode.fillna("")
+    merged_df_4_optioncode = pd.concat([df_4, df_optioncode], axis=0)
+
+    session.close()
+    return df_1, merged_df_4_optioncode, unique_list_max, unique_list_submax
 
 
+def add_function_from_admin(df_end_region3, files):
+    df_end_region3.rename(columns={df_end_region3.columns[0]: 'CADICS ID'}, inplace=True)
+    df_end_region3.loc[df_end_region3['CADICS ID'] == 'SEAT/EQUIP', 'CADICS ID'] = 'SEAT'
+    data_1, data_4_7, unique_list_max, unique_list_submax = update_and_querry_form_data()
+    merge_1_spec = pd.merge(data_1, df_end_region3, on='CADICS ID', how='outer')
 
-def update_data(project_name, df):
+    merge_1_spec['order'] = merge_1_spec['CADICS ID'].apply(
+        lambda x: df_end_region3['CADICS ID'].tolist().index(x) if x in df_end_region3[
+            'CADICS ID'].tolist() else float('inf'))
+
+    merge_1_spec = merge_1_spec.sort_values(by='order').drop(columns='order').reset_index(
+        drop=True)
+
+    merge_end = pd.concat([merge_1_spec, data_4_7], axis=0)
+    merger_end = merge_end.fillna("")
+    merger_end = merger_end.astype(str)
+    conf_columns = ['auto', 'gr', 'keyword', 'CADICS ID'] + [f'conf-{str(i).zfill(3)}' for i in
+                                                             range(1, merger_end.shape[1] - 3)]
+    merger_end.columns = conf_columns
+    return merger_end, unique_list_max, unique_list_submax
+
+
+def update_data_new(project_name, df, df_1):
+    df_ref = df.copy()
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df_1 = df_1.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.drop_duplicates(subset=['CADICS ID'], keep='first')
+    list_error = []
     project_name = str(project_name).upper()
     engine = connect_db()
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
     df.replace({np.nan: ''}, inplace=True)
-    existing_project = (session.query(Project).filter_by(project_name=project_name).first())
-    if existing_project is not None:
-        project_id = existing_project.id_project
-    else:
-        project = Project(project_name=project_name)
-        session.add(project)
+    df.loc[df['CADICS ID'] == 'SEAT/EQUIP', 'CADICS ID'] = 'SEAT'
+    df_1.replace({np.nan: ''}, inplace=True)
+
+    existing_project_name = (session.query(Project).filter_by(project_name=project_name).first())
+    if project_name != 'FORM':
+        if existing_project_name is None:
+            max_project_id = session.query(func.max(Project.project_id)).scalar()
+            if max_project_id is None:
+                max_project_id = 0
+            try:
+                new_project_name = Project(project_id=max_project_id + 1, project_name=project_name)
+                session.add(new_project_name)
+            except mysql.connector.IntegrityError as e:
+                list_error.append((project_name, e))
+        else:
+            project_name_ = str(project_name).upper()
+            session.query(Project).filter(Project.project_name == project_name_).delete()
+            session.commit()
+            max_project_id = session.query(func.max(Project.project_id)).scalar()
+            if max_project_id is None:
+                max_project_id = 0
+            try:
+                new_project_name = Project(project_id=max_project_id + 1, project_name=project_name)
+                session.add(new_project_name)
+            except mysql.connector.IntegrityError as e:
+                list_error.append((project_name, e))
+
+    # 5.---------------------------table device--------------------------
+
+    list_existing_device_name = (session.query(Device.device_name, Device.device_group).all())
+    device_table_df = device_table(df_ref)
+    list_device_table_df = list(device_table_df.itertuples(index=False, name=None))
+    set_list_existing_device_name = set(list_existing_device_name)
+    list_check_device = list(set([tup[0] for tup in set_list_existing_device_name]))
+    list_only_in_list_device_table_df_insert = [item for item in list_device_table_df if
+                                                item not in set_list_existing_device_name and item[
+                                                    0] not in list_check_device]
+
+    list_only_in_list_device_table_df_update = [item for item in list_device_table_df if
+                                                item not in set_list_existing_device_name and item[
+                                                    0] in list_check_device]
+
+    if list_only_in_list_device_table_df_insert:
+        device_table_df_add = pd.DataFrame(list_only_in_list_device_table_df_insert, columns=device_table_df.columns)
+        for index, row in device_table_df_add.iterrows():
+            try:
+                new_querry_device_table = Device(device_name=row['device_name'], device_group=row['device_group'])
+                session.add(new_querry_device_table)
+            except mysql.connector.IntegrityError as e:
+                list_error.append(("table device", row['device_name'], e))
+                session.rollback()
+
+    if list_only_in_list_device_table_df_update:
+        device_table_df_add = pd.DataFrame(list_only_in_list_device_table_df_update, columns=device_table_df.columns)
+        for index, row in device_table_df_add.iterrows():
+            try:
+                existing_record = session.query(Device).filter_by(
+                    device_name=row['device_name']
+                ).first()
+                if existing_record is not None:
+                    stmt = (
+                        update(Device).
+                        where(Device.device_name == row['device_name']).
+                        values(device_group=row['device_group'])
+                    )
+                    session.execute(stmt)
+            except mysql.connector.IntegrityError as e:
+                print(e)
+                session.rollback()
+
+    # 6.------------------------table device_detail--------------------------
+    list_existing_device_detail_name = (
+        session.query(DeviceDetails.device_name, DeviceDetails.device_details_name,
+                      DeviceDetails.group_detail, DeviceDetails.option_detail, DeviceDetails.auto_detail).all())
+
+    device_detail_table_df = device_detail_table(df)
+    list_device_detail_table_df = list(device_detail_table_df.itertuples(index=False, name=None))
+    set_list_existing_device_detail_name = set(list_existing_device_detail_name)
+    list_check_device_detail = list(set([tup[1] for tup in set_list_existing_device_detail_name]))
+
+    list_only_in_list_device_detail_table_df_insert = [item for item in list_device_detail_table_df if
+                                                       item not in set_list_existing_device_detail_name and item[
+                                                           1] not in list_check_device_detail]
+
+    list_only_in_list_device_detail_table_df_update = [item for item in list_device_detail_table_df if
+                                                       item not in set_list_existing_device_detail_name and item[
+                                                           1] in list_check_device_detail]
+    max_device_detail_id = session.query(func.max(DeviceDetails.device_details_id)).scalar()
+    if max_device_detail_id is None:
+        max_device_detail_id = 0
+
+    list_error = []
+    if list_only_in_list_device_detail_table_df_insert:
+        device_detail_table_df_add = pd.DataFrame(list_only_in_list_device_detail_table_df_insert,
+                                                  columns=device_detail_table_df.columns)
+        for index, row in device_detail_table_df_add.iterrows():
+            try:
+                new_device_detail_id = max_device_detail_id + 1  # Tăng ID cho mỗi lần lặp
+
+                new_querry_device_detail_table = DeviceDetails(
+                    device_details_id=new_device_detail_id,
+                    device_name=row['device_name'],
+                    device_details_name=row['device_details_name'],
+                    group_detail=row['group_detail'],
+                    option_detail=row['option_detail'],
+                    auto_detail=row['auto_detail']
+                )
+                session.add(new_querry_device_detail_table)
+
+                max_device_detail_id = new_device_detail_id
+            except Exception as e:
+                list_error.append(row['device_details_name'])
+                session.rollback()
+
+    if list_only_in_list_device_detail_table_df_update:
+        device_detail_table_df_update = pd.DataFrame(list_only_in_list_device_detail_table_df_update,
+                                                     columns=device_detail_table_df.columns)
+        # st.write(device_detail_table_df_update)
+        for index, row in device_detail_table_df_update.iterrows():
+            try:
+                existing_record = session.query(DeviceDetails).filter_by(
+                    device_details_name=row['device_details_name']
+                ).first()
+                if existing_record is not None:
+                    stmt = (
+                        update(DeviceDetails).
+                        where(DeviceDetails.device_details_name == row['device_details_name']).
+                        values(group_detail=row['group_detail'], option_detail=row['option_detail'],
+                               auto_detail=row['auto_detail'], device_name=row['device_name'])
+                    )
+                    session.execute(stmt)
+
+            except Exception as e:
+                print(e)
+                session.rollback()
+    session.commit()
+    if df.shape[1] != 7:
+        # Session = sessionmaker(bind=engine)
+        # session = Session()
+
+        # 2.----------------------table config--------------------------------
+        list_existing_config_name = (session.query(Config.config_name).all())
+        config_table_df = config_table(df)
+        list_config_table_df = list(config_table_df.itertuples(index=False, name=None))
+
+        set_list_existing_config_name = set(list_existing_config_name)
+        only_in_list_config_table_df = [item for item in list_config_table_df if
+                                        item not in set_list_existing_config_name]
+
+        config_table_df_final = pd.DataFrame(only_in_list_config_table_df, columns=['config_name'])
+        max_config_id = session.query(func.max(Config.config_id)).scalar()
+        for index, row in config_table_df_final.iterrows():
+            try:
+                if max_config_id is None:
+                    max_config_id = 1
+                elif index == 0 and max_config_id is not None:
+                    max_config_id += 1
+                # print('max_config_id: ', max_config_id)
+                # print('index: ', index)
+                new_config = Config(config_id=max_config_id + index, config_name=row['config_name'])
+                session.add(new_config)
+            except mysql.connector.IntegrityError as e:
+                list_error.append(("table config", row['config_name'], e))
+                session.rollback()
+
+        # 3.---------------------table lot---------------------------------------
+        list_existing_lot_name = (session.query(Lot.lot_name).all())
+        lot_table_df = lot_table(df_1)
+        list_lot_table_df = list(lot_table_df.itertuples(index=False, name=None))
+        set_list_existing_lot_name = set(list_existing_lot_name)
+
+        only_in_list_lot_table_df = [item for item in list_lot_table_df if item not in set_list_existing_lot_name]
+        if only_in_list_lot_table_df:
+            max_lot_id = session.query(func.max(Lot.lot_id)).scalar()
+            lot_table_df_final = pd.DataFrame(only_in_list_lot_table_df, columns=['lot_name'])
+            for index, row in lot_table_df_final.iterrows():
+                try:
+                    if max_lot_id is None:
+                        max_lot_id = 1
+                        new_lot = Lot(lot_id=max_lot_id + index, lot_name=row['lot_name'])
+                    else:
+                        new_lot = Lot(lot_id=max_lot_id + index + 1, lot_name=row['lot_name'])
+
+                    session.add(new_lot)
+                except mysql.connector.IntegrityError as e:
+                    list_error.append(("table lot", row['lot_name'], e))
+                    session.rollback()
+
+        # 4.-----------------------table comment_column--------------------------------------
+        list_existing_comment_name = (session.query(CommentColumn.comment_name).all())
+        comment_column_table_df = comment_column_table(df)
+        list_comment_table_df = list(comment_column_table_df.itertuples(index=False, name=None))
+        set_list_existing_comment_name = set(list_existing_comment_name)
+
+        only_in_list_comment_table_df = [item for item in list_comment_table_df if
+                                         item not in set_list_existing_comment_name]
+        if only_in_list_comment_table_df:
+            max_comment_id = session.query(func.max(CommentColumn.comment_id)).scalar()
+            comment_df = pd.DataFrame(only_in_list_comment_table_df, columns=['Comment'])
+            for index, row in comment_df.iterrows():
+                try:
+                    if max_comment_id is None:
+                        max_comment_id = 1
+                    elif index == 0 and max_comment_id is not None:
+                        max_comment_id += 1
+                    new_comment = CommentColumn(comment_id=max_comment_id + index, comment_name=row['Comment'])
+                    session.add(new_comment)
+                except mysql.connector.IntegrityError as e:
+                    list_error.append(("table comment_column", row['Comment'], e))
+                    session.rollback()
+
+        # 7.---------------------------table information_project------------------------------
+        list_existing_information_project = (
+            session.query(InformationProject.parameter_name, InformationProject.group_infor,
+                          InformationProject.keyword, InformationProject.auto_infor).all())
+
+        information_project_table_df = information_project_table(df)
+
+        list_information_project_table_df = list(information_project_table_df.itertuples(index=False, name=None))
+        set_list_existing_information_project = set(list_existing_information_project)
+        list_check_information_project = list(set([tup[0] for tup in set_list_existing_information_project]))
+        list_only_in_list_information_project_table_df_insert = [item for item in list_information_project_table_df if
+                                                                 item not in set_list_existing_information_project and
+                                                                 item[
+                                                                     0] not in list_check_information_project]
+
+        list_only_in_list_information_project_table_df_update = [item for item in list_information_project_table_df if
+                                                                 item not in set_list_existing_information_project and
+                                                                 item[
+                                                                     0] in list_check_information_project]
+        if list_only_in_list_information_project_table_df_insert:
+            information_project_table_df_add = pd.DataFrame(list_only_in_list_information_project_table_df_insert,
+                                                            columns=information_project_table_df.columns)
+            for index, row in information_project_table_df_add.iterrows():
+                try:
+                    new_querry_device_information_project_table = InformationProject(parameter_name=row['CADICS ID'],
+                                                                                     group_infor=row['Gr'],
+                                                                                     keyword=row['Keyword'],
+                                                                                     auto_infor=row['auto'])
+                    session.add(new_querry_device_information_project_table)
+                except Exception as e:
+                    print("row['CADICS ID']: ", row['CADICS ID'])
+                    list_error.append(row['CADICS ID'])
+
+        if list_only_in_list_information_project_table_df_update:
+            information_project_table_df_add = pd.DataFrame(list_only_in_list_information_project_table_df_update,
+                                                            columns=information_project_table_df.columns)
+            for index, row in information_project_table_df_add.iterrows():
+                try:
+                    existing_record = session.query(InformationProject).filter_by(
+                        parameter_name=row['CADICS ID']
+                    ).first()
+                    if existing_record is not None:
+                        stmt = (
+                            update(InformationProject).
+                            where(InformationProject.parameter_name == row['CADICS ID']).
+                            values(group_infor=row['Gr'], keyword=row['Keyword'],
+                                   auto_infor=row['auto_infor'])
+                        )
+                        session.execute(stmt)
+                except Exception as e:
+                    print("row['CADICS ID']: ", row['CADICS ID'])
+                    list_error.append(row['CADICS ID'])
+
+        # .---------------------------Querry 7 table under------------------------------
+        querry_config_in_DB = session.query(Config).all()
+        config_data_after_querry = [(config.config_id, config.config_name) for config in querry_config_in_DB]
+        config_table_df_querry = pd.DataFrame(config_data_after_querry, columns=['config_id', 'config_name'])
+
+        querry_project_in_DB = session.query(Project).all()
+        project_data_after_querry = [(project.project_id, project.project_name) for project in querry_project_in_DB]
+        project_table_df_querry = pd.DataFrame(project_data_after_querry, columns=['project_id', 'project_name'])
+
+        querry_lot_in_DB = session.query(Lot).all()
+        lot_data_after_querry = [(lot.lot_id, lot.lot_name) for lot in querry_lot_in_DB]
+        lot_table_df_querry = pd.DataFrame(lot_data_after_querry, columns=['lot_id', 'lot_name'])
+
+        querry_comment_column_in_DB = session.query(CommentColumn).all()
+        comment_column_data_after_querry = [(comment.comment_id, comment.comment_name) for comment in
+                                            querry_comment_column_in_DB]
+        comment_column_table_df_querry = pd.DataFrame(comment_column_data_after_querry,
+                                                      columns=['comment_id', 'comment_name'])
+
+        querry_device_details_in_DB = session.query(DeviceDetails.device_details_id,
+                                                    DeviceDetails.device_details_name).all()
+        device_details_data_after_querry = [(device_details.device_details_id, device_details.device_details_name) for
+                                            device_details in querry_device_details_in_DB]
+        device_details_table_df_querry = pd.DataFrame(device_details_data_after_querry,
+                                                      columns=['device_details_id', 'device_details_name'])
+
+        # 8.-------------------table optioncode--------------------------------------
+        list_existing_optioncode = (
+            session.query(OptionCode.optioncode_value, OptionCode.config_id, OptionCode.project_id).all())
+
+        optioncode_table_df_temp = optioncode_table(df_1, project_name)
+
+        optioncode_table_df_merge_config = pd.merge(optioncode_table_df_temp, config_table_df_querry, on='config_name',
+                                                    how='left')
+        optioncode_table_df = pd.merge(optioncode_table_df_merge_config, project_table_df_querry, on='project_name',
+                                       how='left')
+
+        optioncode_table_df.drop(columns=['config_name', 'project_name'], inplace=True)
+        optioncode_table_df.fillna('null', inplace=True)
+
+        list_OptionCode_table_df = list(optioncode_table_df.itertuples(index=False, name=None))
+        set_list_existing_optioncode = set(list_existing_optioncode)
+        list_only_in_list_optioncode_table_df = [item for item in list_OptionCode_table_df if
+                                                 item not in set_list_existing_optioncode]
+        if list_only_in_list_optioncode_table_df:
+            optioncode_table_df_add = pd.DataFrame(list_only_in_list_optioncode_table_df,
+                                                   columns=optioncode_table_df.columns)
+            # print('optioncode_table_df_add: ',optioncode_table_df_add)
+            for index, row in optioncode_table_df_add.iterrows():
+                try:
+                    existing_record = session.query(OptionCode).filter_by(
+                        config_id=row['config_id'],
+                        project_id=row['project_id']
+                    ).first()
+                    if existing_record is not None:
+                        stmt = (
+                            update(OptionCode).
+                            where(
+                                and_(
+                                    OptionCode.config_id == row['config_id'],
+                                    OptionCode.project_id == row['project_id']
+                                )
+                            ).
+                            values(optioncode_value=row['optioncode_value'])
+                        )
+                        session.execute(stmt)
+                    else:
+                        new_querry_optioncode_table = OptionCode(config_id=row['config_id'],
+                                                                 project_id=row['project_id'],
+                                                                 optioncode_value=row['optioncode_value'])
+                        session.add(new_querry_optioncode_table)
+                except Exception as e:
+                    list_error.append(row['CADICS ID'])
+                    session.rollback()
+
+        # 9.-------------------------table project_device-------------------------
+        list_existing_project_device = (
+            session.query(ProjectDevice.device_name, ProjectDevice.project_id).all())
+
+        project_device = project_device_table(df_ref, project_name)
+        project_device_table_df_temp = pd.merge(project_device, project_table_df_querry, on='project_name',
+                                                how='left')
+        project_device_table_df_temp.drop(columns=['project_name'], inplace=True)
+        project_device_table_df_temp.fillna('null', inplace=True)
+
+        list_project_device_table_df = list(project_device_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_project_device = set(list_existing_project_device)
+
+        list_only_in_list_project_device_table_df = [item for item in list_project_device_table_df if
+                                                     item not in set_list_existing_project_device]
+
+        if list_only_in_list_project_device_table_df:
+            project_device_table_df = pd.DataFrame(list_only_in_list_project_device_table_df,
+                                                   columns=project_device_table_df_temp.columns)
+            for index, row in project_device_table_df.iterrows():
+                try:
+                    new_querry_project_device_table = ProjectDevice(device_name=row['device_name'],
+                                                                    project_id=row['project_id'])
+                    session.add(new_querry_project_device_table)
+                except Exception as e:
+                    print(e)
+                    session.rollback()
+
+        # 10.--------------------------table value_inf------------------------------------
+        list_existing_value_inf = (
+            session.query(ValueInf.parameter_name, ValueInf.value, ValueInf.project_id, ValueInf.config_id).all())
+
+        value_inf = value_inf_table(df.loc[:11, :])
+        value_inf_table_df_merge_prj = pd.merge(value_inf, project_table_df_querry, on='project_name',
+                                                how='left')
+        value_inf_table_df_temp = pd.merge(value_inf_table_df_merge_prj, config_table_df_querry, on='config_name',
+                                           how='left')
+        value_inf_table_df_temp.drop(columns=['project_name', 'config_name'], inplace=True)
+        value_inf_table_df_temp.fillna('null', inplace=True)
+
+        value_inf_table_df_temp['value'] = value_inf_table_df_temp['value'].apply(
+            lambda x: str(x) if x is not None else '')
+
+        list_value_inf_table_df = list(value_inf_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_value_inf = set(list_existing_value_inf)
+        list_check_value_inf = list(
+            set([(tup[0], tup[2], tup[3]) for tup in set_list_existing_value_inf]))
+        list_only_in_list_value_inf_table_df_insert = [item for item in list_value_inf_table_df if
+                                                       item not in set_list_existing_value_inf and (
+                                                           item[0], item[2], item[3]) not in list_check_value_inf]
+        list_only_in_list_value_inf_table_df_update = [item for item in list_value_inf_table_df if
+                                                       item not in set_list_existing_value_inf and (
+                                                           item[0], item[2], item[3]) in list_check_value_inf]
+        if list_only_in_list_value_inf_table_df_insert:
+
+            value_inf_table_df = pd.DataFrame(list_only_in_list_value_inf_table_df_insert,
+                                              columns=value_inf_table_df_temp.columns)
+            # st.write('value_inf_table_df: ', value_inf_table_df)
+            for index, row in value_inf_table_df.iterrows():
+
+                try:
+                    new_querry_value_inf_table = ValueInf(config_id=row['config_id'],
+                                                          parameter_name=row['parameter_name'],
+                                                          value=row['value'], project_id=row['project_id'])
+                    session.add(new_querry_value_inf_table)
+                    session.commit()
+                except Exception as e:
+                    print(e)
+                    session.rollback()
+        if list_only_in_list_value_inf_table_df_update:
+            value_inf_table_df = pd.DataFrame(list_only_in_list_value_inf_table_df_update,
+                                              columns=value_inf_table_df_temp.columns)
+            for index, row in value_inf_table_df.iterrows():
+                try:
+                    stmt = (
+                        update(ValueInf).
+                        where(
+                            and_(
+                                ValueInf.parameter_name == row['parameter_name'],
+                                ValueInf.config_id == row['config_id'],
+                                ValueInf.project_id == row['project_id']
+                            )
+                        ).
+                        values(comment_detail=row['comment_detail'])
+                    )
+                    session.execute(stmt)
+                except Exception as e:
+                    print(e)
+                    session.rollback()
+
+        # 11.---------------------------------table status_lot_config---------------------------
+        list_existing_status_lot_config = (
+            session.query(StatusLotConfig.status, StatusLotConfig.project_id, StatusLotConfig.config_id,
+                          StatusLotConfig.lot_id).all())
+
+        status_lot_config = status_lot_config_table(df_1, project_name)
+        status_lot_config_table_df_merge_prj = pd.merge(status_lot_config, project_table_df_querry, on='project_name',
+                                                        how='left')
+        status_lot_config_table_df_merge_config = pd.merge(status_lot_config_table_df_merge_prj, config_table_df_querry,
+                                                           on='config_name',
+                                                           how='left')
+        status_lot_config_table_df_temp = pd.merge(status_lot_config_table_df_merge_config, lot_table_df_querry,
+                                                   on='lot_name',
+                                                   how='left')
+
+        status_lot_config_table_df_temp.drop(columns=['project_name', 'config_name', 'lot_name'], inplace=True)
+        status_lot_config_table_df_temp.fillna('null', inplace=True)
+
+        list_status_lot_config_table_df = list(status_lot_config_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_status_lot_config = set(list_existing_status_lot_config)
+        list_only_in_list_status_lot_config_table_df = [item for item in list_status_lot_config_table_df if
+                                                        item not in set_list_existing_status_lot_config]
+
+        if list_only_in_list_status_lot_config_table_df:
+            status_lot_config_table_df = pd.DataFrame(list_only_in_list_status_lot_config_table_df,
+                                                      columns=status_lot_config_table_df_temp.columns)
+            for index, row in status_lot_config_table_df.iterrows():
+                try:
+                    existing_record = session.query(StatusLotConfig).filter_by(
+                        config_id=row['config_id'],
+                        project_id=row['project_id'],
+                        lot_id=row['lot_id']
+                    ).first()
+                    if existing_record is not None:
+                        # Câu lệnh cập nhật ORM
+                        stmt = (
+                            update(StatusLotConfig).
+                            where(
+                                and_(
+                                    StatusLotConfig.config_id == row['config_id'],
+                                    StatusLotConfig.project_id == row['project_id'],
+                                    StatusLotConfig.lot_id == row['lot_id']
+                                )
+                            ).
+                            values(status=row['status'])
+                        )
+                        session.execute(stmt)
+                    else:
+                        new_querry_status_lot_config_table = StatusLotConfig(config_id=row['config_id'],
+                                                                             lot_id=row['lot_id'],
+                                                                             status=row['status'],
+                                                                             project_id=row['project_id'])
+                        session.add(new_querry_status_lot_config_table)
+                except Exception as e:
+                    print(e)
+                    session.rollback()
+
+        # 12.---------------------------------table project_device_comment--------------------
+        list_existing_project_device_comment = (
+            session.query(ProjectDeviceComment.comment_detail, ProjectDeviceComment.project_id,
+                          ProjectDeviceComment.comment_id, ProjectDeviceComment.device_details_id).all())
+
+        project_device_comment = project_device_comment_table(df.loc[11:, ], project_name)
+
+        project_device_comment_table_df_merge_prj = pd.merge(project_device_comment, project_table_df_querry,
+                                                             on='project_name',
+                                                             how='left')
+        project_device_comment_table_df_merge_cmt = pd.merge(project_device_comment_table_df_merge_prj,
+                                                             comment_column_table_df_querry, on='comment_name',
+                                                             how='left')
+        project_device_comment_table_df_temp = pd.merge(project_device_comment_table_df_merge_cmt,
+                                                        device_details_table_df_querry, on='device_details_name',
+                                                        how='left')
+        project_device_comment_table_df_temp.drop(columns=['project_name', 'comment_name', 'device_details_name'],
+                                                  inplace=True)
+
+        project_device_comment_table_df_temp.fillna('null', inplace=True)
+
+        list_project_device_comment_table_df = list(
+            project_device_comment_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_project_device_comment = set(list_existing_project_device_comment)
+        list_check_project_device_comment = list(
+            set([(tup[1], tup[2], tup[3]) for tup in set_list_existing_project_device_comment]))
+        # print('list_check_project_device_comment: ', list_check_project_device_comment)
+        list_only_in_list_project_device_comment_table_df_insert = [item for item in
+                                                                    list_project_device_comment_table_df if
+                                                                    item not in set_list_existing_project_device_comment and (
+                                                                        item[1], item[2],
+                                                                        item[
+                                                                            3]) not in list_check_project_device_comment]
+        list_only_in_list_project_device_comment_table_df_update = [item for item in
+                                                                    list_project_device_comment_table_df if
+                                                                    item not in set_list_existing_project_device_comment and (
+                                                                        item[1], item[2],
+                                                                        item[3]) in list_check_project_device_comment]
+        if list_only_in_list_project_device_comment_table_df_update:
+            project_device_comment_table_df = pd.DataFrame(list_only_in_list_project_device_comment_table_df_update,
+                                                           columns=project_device_comment_table_df_temp.columns)
+            for index, row in project_device_comment_table_df.iterrows():
+                try:
+                    stmt = (
+                        update(ProjectDeviceComment).
+                        where(
+                            and_(
+                                ProjectDeviceComment.comment_id == row['comment_id'],
+                                ProjectDeviceComment.project_id == row['project_id'],
+                                ProjectDeviceComment.device_details_id == row['device_details_id']
+                            )
+                        ).
+                        values(comment_detail=row['comment_detail'])
+                    )
+                    session.execute(stmt)
+                except Exception as e:
+                    print(e)
+                    session.rollback()
+
+        if list_only_in_list_project_device_comment_table_df_insert:
+            project_device_comment_table_df = pd.DataFrame(list_only_in_list_project_device_comment_table_df_insert,
+                                                           columns=project_device_comment_table_df_temp.columns)
+            for index, row in project_device_comment_table_df.iterrows():
+                try:
+                    new_querry_project_device_comment_table_table = ProjectDeviceComment(
+                        device_details_id=row['device_details_id'], comment_id=row['comment_id'],
+                        comment_detail=row['comment_detail'], project_id=row['project_id'])
+                    session.add(new_querry_project_device_comment_table_table)
+                except Exception as e:
+                    print(e)
+                    session.rollback()
+        # 13.-------------------------table status_config_device_detail------------------------------
+
+        list_existing_status_config_device_detail = (
+            session.query(StatusConfigDeviceDetail.status, StatusConfigDeviceDetail.project_id,
+                          StatusConfigDeviceDetail.config_id, StatusConfigDeviceDetail.device_details_id).all())
+        status_config_device_detail = status_config_device_detail_table(df.loc[12:, ], project_name)
+        status_config_device_detail_table_df_merge_prj = pd.merge(status_config_device_detail, project_table_df_querry,
+                                                                  on='project_name',
+                                                                  how='left')
+        status_config_device_detail_table_df_merge_config = pd.merge(status_config_device_detail_table_df_merge_prj,
+                                                                     config_table_df_querry,
+                                                                     on='config_name',
+                                                                     how='left')
+        status_config_device_detail_table_df_temp = pd.merge(status_config_device_detail_table_df_merge_config,
+                                                             device_details_table_df_querry, on='device_details_name',
+                                                             how='left')
+        status_config_device_detail_table_df_temp.drop(columns=['project_name', 'config_name', 'device_details_name'],
+                                                       inplace=True)
+        status_config_device_detail_table_df_temp.fillna('null', inplace=True)
+        status_config_device_detail_table_df_temp['status'] = status_config_device_detail_table_df_temp['status'].apply(
+            lambda x: str(x) if x is not None else '')
+        list_status_config_device_detail_table_df = list(
+            status_config_device_detail_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_status_config_device_detail = set(list_existing_status_config_device_detail)
+        # print('set_list_existing_status_config_device_detail: ', set_list_existing_status_config_device_detail)
+        list_check_status_config_device_detail = list(
+            set([(tup[1], tup[2], tup[3]) for tup in set_list_existing_status_config_device_detail]))
+        list_only_in_list_status_config_device_detail_table_df_insert = [item for item in
+                                                                         list_status_config_device_detail_table_df
+                                                                         if
+                                                                         item not in set_list_existing_status_config_device_detail and (
+                                                                             item[1], item[2], item[
+                                                                                 3]) not in list_check_status_config_device_detail]
+        list_only_in_list_status_config_device_detail_table_df_update = [item for item in
+                                                                         list_status_config_device_detail_table_df
+                                                                         if
+                                                                         item not in set_list_existing_status_config_device_detail and (
+                                                                             item[1], item[2], item[
+                                                                                 3]) in list_check_status_config_device_detail]
+        if list_only_in_list_status_config_device_detail_table_df_insert:
+            status_config_device_detail_table_df = pd.DataFrame(
+                list_only_in_list_status_config_device_detail_table_df_insert,
+                columns=status_config_device_detail_table_df_temp.columns)
+            for index, row in status_config_device_detail_table_df.iterrows():
+                try:
+                    new_querry_status_config_device_detail_table = StatusConfigDeviceDetail(
+                        device_details_id=row['device_details_id'], config_id=row['config_id'],
+                        status=row['status'], project_id=row['project_id'])
+                    session.add(new_querry_status_config_device_detail_table)
+                except Exception as e:
+                    print(e)
+                    session.rollback()
+
+        if list_only_in_list_status_config_device_detail_table_df_update:
+            status_config_device_detail_table_df = pd.DataFrame(
+                list_only_in_list_status_config_device_detail_table_df_update,
+                columns=status_config_device_detail_table_df_temp.columns)
+            for index, row in status_config_device_detail_table_df.iterrows():
+                try:
+                    stmt = (
+                        update(StatusConfigDeviceDetail).
+                        where(
+                            and_(
+                                StatusConfigDeviceDetail.config_id == row['config_id'],
+                                StatusConfigDeviceDetail.project_id == row['project_id'],
+                                StatusConfigDeviceDetail.device_details_id == row['device_details_id']
+                            )
+                        ).
+                        values(status=row['status'])
+                    )
+                    session.execute(stmt)
+                except Exception as e:
+                    print(e)
+                    session.rollback()
+
+    session.commit()
+    session.close()
+    # st.success(project_name)
+
+
+def update_data_new_online(project_name, df, df_1):
+    df_ref = df.copy()
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df_1 = df_1.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.drop_duplicates(subset=['CADICS ID'], keep='first')
+    list_error = []
+    project_name = str(project_name).upper()
+    engine = connect_db()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    df.replace({np.nan: ''}, inplace=True)
+
+    # 5.---------------------------table device--------------------------
+
+    list_existing_device_name = (session.query(Device.device_name, Device.device_group).all())
+
+    device_table_df = device_table(df_ref)
+
+    list_device_table_df = list(device_table_df.itertuples(index=False, name=None))
+    set_list_existing_device_name = set(list_existing_device_name)
+    list_only_in_list_device_table_df = [item for item in list_device_table_df if
+                                         item not in set_list_existing_device_name]
+    if list_only_in_list_device_table_df:
+        device_table_df_add = pd.DataFrame(list_only_in_list_device_table_df, columns=device_table_df.columns)
+        for index, row in device_table_df_add.iterrows():
+            try:
+                new_querry_device_table = Device(device_name=row['device_name'], device_group=row['device_group'])
+                session.add(new_querry_device_table)
+            except mysql.connector.IntegrityError as e:
+                list_error.append(("table device", row['device_name'], e))
+                session.rollback()
+    # 6.------------------------table device_detail--------------------------
+    list_existing_device_detail_name = (
+        session.query(DeviceDetails.device_name, DeviceDetails.device_details_name,
+                      DeviceDetails.group_detail, DeviceDetails.option_detail, DeviceDetails.auto_detail).all())
+
+    device_detail_table_df = device_detail_table(df)
+    list_device_detail_table_df = list(device_detail_table_df.itertuples(index=False, name=None))
+    set_list_existing_device_detail_name = set(list_existing_device_detail_name)
+
+    list_only_in_list_device_detail_table_df = [item for item in list_device_detail_table_df if
+                                                item not in set_list_existing_device_detail_name]
+    max_device_detail_id = session.query(func.max(DeviceDetails.device_details_id)).scalar()
+    if max_device_detail_id is None:
+        max_device_detail_id = 0
+
+    list_error = []
+    if list_only_in_list_device_detail_table_df:
+        device_detail_table_df_add = pd.DataFrame(list_only_in_list_device_detail_table_df,
+                                                  columns=device_detail_table_df.columns)
+        for index, row in device_detail_table_df_add.iterrows():
+            try:
+                new_device_detail_id = max_device_detail_id + 1  # Tăng ID cho mỗi lần lặp
+
+                new_querry_device_detail_table = DeviceDetails(
+                    device_details_id=new_device_detail_id,
+                    device_name=row['device_name'],
+                    device_details_name=row['device_details_name'],
+                    group_detail=row['group_detail'],
+                    option_detail=row['option_detail'],
+                    auto_detail=row['auto_detail']
+                )
+                session.add(new_querry_device_detail_table)
+
+                max_device_detail_id = new_device_detail_id
+            except Exception as e:
+                print('906', e)
+                list_error.append(row['device_details_name'])
+                session.rollback()
+    if df.shape[1] != 7:
+        # 2.----------------------table config--------------------------------
+        list_existing_config_name = (session.query(Config.config_name).all())
+        config_table_df = config_table(df)
+        list_config_table_df = list(config_table_df.itertuples(index=False, name=None))
+
+        set_list_existing_config_name = set(list_existing_config_name)
+        only_in_list_config_table_df = [item for item in list_config_table_df if
+                                        item not in set_list_existing_config_name]
+
+        config_table_df_final = pd.DataFrame(only_in_list_config_table_df, columns=['config_name'])
+        print('config_table_df_final: ', config_table_df_final)
+        max_config_id = session.query(func.max(Config.config_id)).scalar()
+        for index, row in config_table_df_final.iterrows():
+            try:
+                if max_config_id is None:
+                    max_config_id = 1
+                elif index == 0 and max_config_id is not None:
+                    max_config_id += 1
+                new_config = Config(config_id=max_config_id + index, config_name=row['config_name'])
+                session.add(new_config)
+            except mysql.connector.IntegrityError as e:
+                print('942', e)
+                list_error.append(("table config", row['config_name'], e))
+                session.rollback()
+
+        # 3.---------------------table lot---------------------------------------
+        list_existing_lot_name = (session.query(Lot.lot_name).all())
+        lot_table_df = lot_table(df_1)
+        list_lot_table_df = list(lot_table_df.itertuples(index=False, name=None))
+        set_list_existing_lot_name = set(list_existing_lot_name)
+
+        only_in_list_lot_table_df = [item for item in list_lot_table_df if item not in set_list_existing_lot_name]
+        print('only_in_list_lot_table_df: ', only_in_list_lot_table_df)
+        if only_in_list_lot_table_df:
+            max_lot_id = session.query(func.max(Lot.lot_id)).scalar()
+            lot_table_df = pd.DataFrame(columns=['lot_Name'])
+            for index, row in lot_table_df.iterrows():
+                try:
+                    if max_lot_id is None:
+                        max_lot_id = 1
+                        new_lot = Lot(lot_id=max_lot_id + index, lot_name=row['lot_name'])
+                    else:
+                        new_lot = Lot(lot_id=max_lot_id + index + 1, lot_name=row['lot_name'])
+
+                    session.add(new_lot)
+                except mysql.connector.IntegrityError as e:
+                    print('966', 6)
+                    list_error.append(("table lot", row['lot_name'], e))
+                    session.rollback()
+
+        # 4.-----------------------table comment_column--------------------------------------
+        list_existing_comment_name = (session.query(CommentColumn.comment_name).all())
+        comment_column_table_df = comment_column_table(df)
+        list_comment_table_df = list(comment_column_table_df.itertuples(index=False, name=None))
+        set_list_existing_comment_name = set(list_existing_comment_name)
+
+        only_in_list_comment_table_df = [item for item in list_comment_table_df if
+                                         item not in set_list_existing_comment_name]
+        if only_in_list_comment_table_df:
+            max_comment_id = session.query(func.max(CommentColumn.comment_id)).scalar()
+            comment_df = pd.DataFrame(only_in_list_comment_table_df, columns=['Comment'])
+            # print('comment_df: ', comment_df)
+            for index, row in comment_df.iterrows():
+                try:
+                    if max_comment_id is None:
+                        max_comment_id = 1
+                    elif index == 0 and max_comment_id is not None:
+                        max_comment_id += 1
+                    new_comment = CommentColumn(comment_id=max_comment_id + index, comment_name=row['Comment'])
+                    session.add(new_comment)
+                except mysql.connector.IntegrityError as e:
+                    print('991', e)
+                    list_error.append(("table comment_column", row['Comment'], e))
+                    session.rollback()
+
+        # 7.---------------------------table information_project------------------------------
+        list_existing_information_project = (
+            session.query(InformationProject.parameter_name, InformationProject.group_infor,
+                          InformationProject.keyword, InformationProject.auto_infor).all())
+
+        information_project_table_df = information_project_table(df)
+
+        list_information_project_table_df = list(information_project_table_df.itertuples(index=False, name=None))
+        set_list_existing_information_project = set(list_existing_information_project)
+        list_only_in_list_information_project_table_df = [item for item in list_information_project_table_df if
+                                                          item not in set_list_existing_information_project]
+        if list_only_in_list_information_project_table_df:
+            information_project_table_df_add = pd.DataFrame(list_only_in_list_information_project_table_df,
+                                                            columns=information_project_table_df.columns)
+            for index, row in information_project_table_df_add.iterrows():
+                try:
+                    new_querry_device_information_project_table = InformationProject(parameter_name=row['CADICS ID'],
+                                                                                     group_infor=row['Gr'],
+                                                                                     keyword=row['Keyword'],
+                                                                                     auto_infor=row['auto'])
+                    session.add(new_querry_device_information_project_table)
+                    # session.commit()
+                except Exception as e:
+                    print("Error: ", e)
+                    list_error.append(row['CADICS ID'])
+
+        # .---------------------------Querry 7 table under------------------------------
+        querry_config_in_DB = session.query(Config).all()
+        config_data_after_querry = [(config.config_id, config.config_name) for config in querry_config_in_DB]
+        config_table_df_querry = pd.DataFrame(config_data_after_querry, columns=['config_id', 'config_name'])
+
+        querry_project_in_DB = session.query(Project).all()
+        project_data_after_querry = [(project.project_id, project.project_name) for project in querry_project_in_DB]
+        project_table_df_querry = pd.DataFrame(project_data_after_querry, columns=['project_id', 'project_name'])
+
+        querry_lot_in_DB = session.query(Lot).all()
+        lot_data_after_querry = [(lot.lot_id, lot.lot_name) for lot in querry_lot_in_DB]
+        lot_table_df_querry = pd.DataFrame(lot_data_after_querry, columns=['lot_id', 'lot_name'])
+
+        querry_comment_column_in_DB = session.query(CommentColumn).all()
+        comment_column_data_after_querry = [(comment.comment_id, comment.comment_name) for comment in
+                                            querry_comment_column_in_DB]
+        comment_column_table_df_querry = pd.DataFrame(comment_column_data_after_querry,
+                                                      columns=['comment_id', 'comment_name'])
+
+        querry_device_details_in_DB = session.query(DeviceDetails.device_details_id,
+                                                    DeviceDetails.device_details_name).all()
+        device_details_data_after_querry = [(device_details.device_details_id, device_details.device_details_name) for
+                                            device_details in querry_device_details_in_DB]
+        device_details_table_df_querry = pd.DataFrame(device_details_data_after_querry,
+                                                      columns=['device_details_id', 'device_details_name'])
+
+        # 8.-------------------table optioncode--------------------------------------
+        list_existing_optioncode = (
+            session.query(OptionCode.optioncode_value, OptionCode.config_id, OptionCode.project_id).all())
+
+        optioncode_table_df_temp = optioncode_table(df_1, project_name)
+
+        optioncode_table_df_merge_config = pd.merge(optioncode_table_df_temp, config_table_df_querry, on='config_name',
+                                                    how='left')
+        optioncode_table_df = pd.merge(optioncode_table_df_merge_config, project_table_df_querry, on='project_name',
+                                       how='left')
+
+        optioncode_table_df.drop(columns=['config_name', 'project_name'], inplace=True)
+        optioncode_table_df.fillna('null', inplace=True)
+
+        list_OptionCode_table_df = list(optioncode_table_df.itertuples(index=False, name=None))
+        set_list_existing_optioncode = set(list_existing_optioncode)
+        list_only_in_list_optioncode_table_df = [item for item in list_OptionCode_table_df if
+                                                 item not in set_list_existing_optioncode]
+        if list_only_in_list_optioncode_table_df:
+            optioncode_table_df_add = pd.DataFrame(list_only_in_list_optioncode_table_df,
+                                                   columns=optioncode_table_df.columns)
+            for index, row in optioncode_table_df_add.iterrows():
+                try:
+                    existing_record = session.query(OptionCode).filter_by(
+                        config_id=row['config_id'],
+                        project_id=row['project_id']
+                    ).first()
+                    if existing_record is not None:
+                        existing_record.optioncode_value = row['optioncode_value']
+
+                        # Câu lệnh cập nhật ORM
+                        stmt = (
+                            update(OptionCode).
+                            where(
+                                and_(
+                                    OptionCode.config_id == row['config_id'],
+                                    OptionCode.project_id == row['project_id']
+                                )
+                            ).
+                            values(optioncode_value=row['optioncode_value'])
+                        )
+                        session.execute(stmt)
+                    else:
+                        new_querry_optioncode_table = OptionCode(config_id=row['config_id'],
+                                                                 project_id=row['project_id'],
+                                                                 optioncode_value=row['optioncode_value'])
+                        session.add(new_querry_optioncode_table)
+                except Exception as e:
+                    print('1087', e)
+                    session.rollback()
+
+        # 9.-------------------------table project_device-------------------------
+        list_existing_project_device = (
+            session.query(ProjectDevice.device_name, ProjectDevice.project_id).all())
+
+        project_device = project_device_table(df_ref, project_name)
+        project_device_table_df_temp = pd.merge(project_device, project_table_df_querry, on='project_name',
+                                                how='left')
+        project_device_table_df_temp.drop(columns=['project_name'], inplace=True)
+        project_device_table_df_temp.fillna('null', inplace=True)
+
+        list_project_device_table_df = list(project_device_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_project_device = set(list_existing_project_device)
+
+        list_only_in_list_project_device_table_df = [item for item in list_project_device_table_df if
+                                                     item not in set_list_existing_project_device]
+
+        if list_only_in_list_project_device_table_df:
+            project_device_table_df = pd.DataFrame(list_only_in_list_project_device_table_df,
+                                                   columns=project_device_table_df_temp.columns)
+            print('project_device_table_df: ', project_device_table_df)
+            for index, row in project_device_table_df.iterrows():
+                try:
+                    new_querry_project_device_table = ProjectDevice(device_name=row['device_name'],
+                                                                    project_id=row['project_id'])
+                    session.add(new_querry_project_device_table)
+                except Exception as e:
+                    print('1117', e)
+                    session.rollback()
+
+        # 10.--------------------------table value_inf------------------------------------
+        list_existing_value_inf = (
+            session.query(ValueInf.parameter_name, ValueInf.value, ValueInf.project_id, ValueInf.config_id).all())
+
+        value_inf = value_inf_table(df.loc[:11, :])
+        value_inf_table_df_merge_prj = pd.merge(value_inf, project_table_df_querry, on='project_name',
+                                                how='left')
+        value_inf_table_df_temp = pd.merge(value_inf_table_df_merge_prj, config_table_df_querry, on='config_name',
+                                           how='left')
+        value_inf_table_df_temp.drop(columns=['project_name', 'config_name'], inplace=True)
+        value_inf_table_df_temp.fillna('null', inplace=True)
+
+        value_inf_table_df_temp['value'] = value_inf_table_df_temp['value'].apply(
+            lambda x: str(x) if x is not None else '')
+
+        list_value_inf_table_df = list(value_inf_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_value_inf = set(list_existing_value_inf)
+
+        list_only_in_list_value_inf_table_df = [item for item in list_value_inf_table_df if
+                                                item not in set_list_existing_value_inf]
+        if list_only_in_list_value_inf_table_df:
+
+            value_inf_table_df = pd.DataFrame(list_only_in_list_value_inf_table_df,
+                                              columns=value_inf_table_df_temp.columns)
+            print("value_inf_table_df: ", value_inf_table_df)
+            for index, row in value_inf_table_df.iterrows():
+                try:
+                    new_querry_value_inf_table = ValueInf(config_id=row['config_id'],
+                                                          parameter_name=row['parameter_name'],
+                                                          value=row['value'], project_id=row['project_id'])
+                    session.add(new_querry_value_inf_table)
+                    # session.commit()
+                except Exception as e:
+                    print('1160', e)
+                    session.rollback()
+
+        # 11.---------------------------------table status_lot_config---------------------------
+        list_existing_status_lot_config = (
+            session.query(StatusLotConfig.status, StatusLotConfig.project_id, StatusLotConfig.config_id,
+                          StatusLotConfig.lot_id).all())
+
+        status_lot_config = status_lot_config_table(df_1, project_name)
+        status_lot_config_table_df_merge_prj = pd.merge(status_lot_config, project_table_df_querry, on='project_name',
+                                                        how='left')
+        status_lot_config_table_df_merge_config = pd.merge(status_lot_config_table_df_merge_prj, config_table_df_querry,
+                                                           on='config_name',
+                                                           how='left')
+        status_lot_config_table_df_temp = pd.merge(status_lot_config_table_df_merge_config, lot_table_df_querry,
+                                                   on='lot_name',
+                                                   how='left')
+
+        status_lot_config_table_df_temp.drop(columns=['project_name', 'config_name', 'lot_name'], inplace=True)
+        status_lot_config_table_df_temp.fillna('null', inplace=True)
+
+        list_status_lot_config_table_df = list(status_lot_config_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_status_lot_config = set(list_existing_status_lot_config)
+        list_only_in_list_status_lot_config_table_df = [item for item in list_status_lot_config_table_df if
+                                                        item not in set_list_existing_status_lot_config]
+
+        if list_only_in_list_status_lot_config_table_df:
+
+            status_lot_config_table_df = pd.DataFrame(list_only_in_list_status_lot_config_table_df,
+                                                      columns=status_lot_config_table_df_temp.columns)
+            for index, row in status_lot_config_table_df.iterrows():
+                try:
+                    existing_record = session.query(StatusLotConfig).filter_by(
+                        config_id=row['config_id'],
+                        project_id=row['project_id'],
+                        lot_id=row['lot_id']
+                    ).first()
+                    if existing_record is not None:
+                        # existing_record.status = row['status']
+
+                        # Câu lệnh cập nhật ORM
+                        stmt = (
+                            update(StatusLotConfig).
+                            where(
+                                and_(
+                                    StatusLotConfig.config_id == row['config_id'],
+                                    StatusLotConfig.project_id == row['project_id'],
+                                    StatusLotConfig.lot_id == row['lot_id']
+                                )
+                            ).
+                            values(status=row['status'])
+                        )
+                        session.execute(stmt)
+                    else:
+                        new_querry_status_lot_config_table = StatusLotConfig(config_id=row['config_id'],
+                                                                             lot_id=row['lot_id'],
+                                                                             status=row['status'],
+                                                                             project_id=row['project_id'])
+                        session.add(new_querry_status_lot_config_table)
+                except Exception as e:
+                    print('1208', e)
+                    session.rollback()
+
+        # 12.---------------------------------table project_device_comment--------------------
+        list_existing_project_device_comment = (
+            session.query(ProjectDeviceComment.comment_detail, ProjectDeviceComment.project_id,
+                          ProjectDeviceComment.comment_id, ProjectDeviceComment.device_details_id).all())
+
+        project_device_comment = project_device_comment_table(df.loc[12:, ], project_name)
+
+        project_device_comment_table_df_merge_prj = pd.merge(project_device_comment, project_table_df_querry,
+                                                             on='project_name',
+                                                             how='left')
+        project_device_comment_table_df_merge_cmt = pd.merge(project_device_comment_table_df_merge_prj,
+                                                             comment_column_table_df_querry, on='comment_name',
+                                                             how='left')
+        project_device_comment_table_df_temp = pd.merge(project_device_comment_table_df_merge_cmt,
+                                                        device_details_table_df_querry, on='device_details_name',
+                                                        how='left')
+        project_device_comment_table_df_temp.drop(columns=['project_name', 'comment_name', 'device_details_name'],
+                                                  inplace=True)
+
+        project_device_comment_table_df_temp.fillna('null', inplace=True)
+
+        list_project_device_comment_table_df = list(
+            project_device_comment_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_project_device_comment = set(list_existing_project_device_comment)
+        list_only_in_list_project_device_comment_table_df = [item for item in list_project_device_comment_table_df if
+                                                             item not in set_list_existing_project_device_comment]
+        if list_only_in_list_project_device_comment_table_df:
+            project_device_comment_table_df = pd.DataFrame(list_only_in_list_project_device_comment_table_df,
+                                                           columns=project_device_comment_table_df_temp.columns)
+            print('project_device_comment_table_df: ', project_device_comment_table_df)
+            for index, row in project_device_comment_table_df.iterrows():
+                try:
+                    existing_record = session.query(ProjectDeviceComment).filter_by(
+                        comment_id=row['comment_id'],
+                        project_id=row['project_id'],
+                        device_details_id=row['device_details_id']
+                    ).first()
+                    if existing_record is not None:
+                        # existing_record.comment_detail = row['comment_detail']
+
+                        # Câu lệnh cập nhật ORM
+                        stmt = (
+                            update(ProjectDeviceComment).
+                            where(
+                                and_(
+                                    ProjectDeviceComment.comment_id == row['comment_id'],
+                                    ProjectDeviceComment.project_id == row['project_id'],
+                                    ProjectDeviceComment.device_details_id == row['device_details_id']
+                                )
+                            ).
+                            values(comment_detail=row['comment_detail'])
+                        )
+                        session.execute(stmt)
+                    else:
+                        new_querry_project_device_comment_table_table = ProjectDeviceComment(
+                            device_details_id=row['device_details_id'], comment_id=row['comment_id'],
+                            comment_detail=row['comment_detail'], project_id=row['project_id'])
+                        session.add(new_querry_project_device_comment_table_table)
+                except Exception as e:
+                    print('1256', e)
+                    session.rollback()
+        # 13.-------------------------table status_config_device_detail------------------------------
+
+        list_existing_status_config_device_detail = (
+            session.query(StatusConfigDeviceDetail.status, StatusConfigDeviceDetail.project_id,
+                          StatusConfigDeviceDetail.config_id, StatusConfigDeviceDetail.device_details_id).all())
+        status_config_device_detail = status_config_device_detail_table(df.loc[12:, ], project_name)
+        status_config_device_detail_table_df_merge_prj = pd.merge(status_config_device_detail, project_table_df_querry,
+                                                                  on='project_name',
+                                                                  how='left')
+        status_config_device_detail_table_df_merge_config = pd.merge(status_config_device_detail_table_df_merge_prj,
+                                                                     config_table_df_querry,
+                                                                     on='config_name',
+                                                                     how='left')
+        status_config_device_detail_table_df_temp = pd.merge(status_config_device_detail_table_df_merge_config,
+                                                             device_details_table_df_querry, on='device_details_name',
+                                                             how='left')
+        status_config_device_detail_table_df_temp.drop(columns=['project_name', 'config_name', 'device_details_name'],
+                                                       inplace=True)
+        status_config_device_detail_table_df_temp.fillna('null', inplace=True)
+        status_config_device_detail_table_df_temp['status'] = status_config_device_detail_table_df_temp['status'].apply(
+            lambda x: str(x) if x is not None else '')
+        # print(status_config_device_detail_table_df_temp)
+        list_status_config_device_detail_table_df = list(
+            status_config_device_detail_table_df_temp.itertuples(index=False, name=None))
+        set_list_existing_status_config_device_detail = set(list_existing_status_config_device_detail)
+        list_only_in_list_status_config_device_detail_table_df = [item for item in
+                                                                  list_status_config_device_detail_table_df
+                                                                  if
+                                                                  item not in set_list_existing_status_config_device_detail]
+        if list_only_in_list_status_config_device_detail_table_df:
+            status_config_device_detail_table_df = pd.DataFrame(list_only_in_list_status_config_device_detail_table_df,
+                                                                columns=status_config_device_detail_table_df_temp.columns)
+            # status_config_device_detail_table_df.to_excel('status_config_device_detail_table_df.xlsx')
+            print('status_config_device_detail_table_df: ', status_config_device_detail_table_df)
+            for index, row in status_config_device_detail_table_df.iterrows():
+                try:
+                    existing_record = session.query(StatusConfigDeviceDetail).filter_by(
+                        config_id=row['config_id'],
+                        project_id=row['project_id'],
+                        device_details_id=row['device_details_id']
+                    ).first()
+                    if existing_record is not None:
+                        # existing_record.status = row['status']
+
+                        # Câu lệnh cập nhật ORM
+                        stmt = (
+                            update(StatusConfigDeviceDetail).
+                            where(
+                                and_(
+                                    StatusConfigDeviceDetail.config_id == row['config_id'],
+                                    StatusConfigDeviceDetail.project_id == row['project_id'],
+                                    StatusConfigDeviceDetail.device_details_id == row['device_details_id']
+                                )
+                            ).
+                            values(status=row['status'])
+                        )
+                        session.execute(stmt)
+                    else:
+                        new_querry_status_config_device_detail_table = StatusConfigDeviceDetail(
+                            device_details_id=row['device_details_id'], config_id=row['config_id'],
+                            status=row['status'], project_id=row['project_id'])
+                        session.add(new_querry_status_config_device_detail_table)
+                except Exception as e:
+                    print('1301', e)
+                    session.rollback()
+    st.success('Update completed')
+    session.commit()
+    session.close()
+
+
+def delete_project(df_):
+    df_delete = df_.loc[df_['Delete'] == True]
+    engine = connect_db()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    for index, row in df_delete.iterrows():
+        project_name_ = row['project_name']
+        project_name_ = str(project_name_).upper()
+        session.query(Project).filter(Project.project_name == project_name_).delete()
+    session.commit()
+    session.close()
+    st.success("Delete Completed")
+    return df_.loc[df_['Delete'] == False]
+
+
+def get_gray_blue(project_name):
+    project_name = project_name.upper()
+    engine = connect_db()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    all_project = [name[0] for name in session.query(Project.project_name).all()]
+    max_project_id = session.query(func.max(Project.project_id)).scalar()
+    if project_name not in all_project:
+        new_project = Project(project_id=max_project_id + 1, project_name=project_name)
+        session.add(new_project)
         session.commit()
-    return session, df
+    result_querry_region_4_gray = set(session.query(Device.device_group).all())
+    result_querry_region_4_blue = set(session.query(Device.device_name).all())
+    session.close()
+    return result_querry_region_4_gray, result_querry_region_4_blue
+
+
+def querry_to_show_project():
+    engine = connect_db()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    df_project = session.query(Project.project_name).all()
+    all_project = [name[0] for name in session.query(Project.project_name).all()]
+    session.close()
+    df = pd.DataFrame(df_project, columns=['project_name'])
+    df['Delete'] = False
+    return df

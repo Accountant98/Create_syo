@@ -2,7 +2,7 @@ import sys
 import os
 import pandas as pd
 import zipfile
-# from funtion_database_new import query_data
+from src.db.funtion_database import query_data
 
 
 def frame_empty():
@@ -16,9 +16,9 @@ def frame_empty():
 def check_file_out(car, powertrain, plant, case):
     list_check = []
     car = str(car).upper()
-    working = os.path.dirname(__file__)
+    #working = os.path.dirname(__file__)
     folder_out = car + "_" + powertrain + "_" + plant + "_" + case
-    folder_output = os.path.join(working, "output", folder_out)
+    folder_output = os.path.join( "./output", folder_out)
     folder_output = folder_output.replace("\\", "/")
     name_zip = folder_out + ".zip"
     list_file_out = ["Car配車要望表.xlsx", "WTC仕様用途一覧表.xlsx", "WTC要望集約兼チェックリスト.xlsx", "実験部品.xlsx",
@@ -66,9 +66,9 @@ def zip_folder(folder_path, zip_path):
 
 def write_cadic_temp(use, pos, car, pwt, plant, case, df):
     if pos == "admin":
-        working = os.path.dirname(__file__)
+        #working = os.path.dirname(__file__)
         folder_name = str(use).upper() + "_" + str(car).upper() + "_" + pwt + "_" + plant + "_" + case
-        folder_data = os.path.join(working, "cadic_temp", folder_name)
+        folder_data = os.path.join("./cadic_temp", folder_name)
         folder_data = folder_data.replace("\\", "/")
         link_cadic = folder_data + "/CADICS_ALL.csv"
         if not os.path.exists(folder_data):

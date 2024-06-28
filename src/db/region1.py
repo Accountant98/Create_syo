@@ -1,9 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, func, and_, MetaData
-from hashlib import sha256
-from sqlalchemy.orm import sessionmaker, aliased, declarative_base, class_mapper, relationship
-import decouple
 import pandas as pd
-import streamlit as st
 
 
 def region_1(result_querry_region1):
@@ -34,22 +29,14 @@ def region_3(result_querry_region3):
                               columns=['CADICS ID', 'keyword', 'gr', 'auto', 'Project', 'Config', 'Value'])
 
     df_3 = df_3_begin.pivot(index='CADICS ID', columns='Config', values='Value')
-    # st.write(df_3)
     df_3.reset_index(inplace=True)
     return df_3
 
 
 def region_4(results_querry_region_4, index_df_1):
-    df_4_begin = pd.DataFrame(results_querry_region_4, columns=[
-        'device_details_name',
-        'option_detail',
-        'auto',
-        'group_detail',
-        'device_name',
-        'device_group'
-    ])
-    df_4_begin = df_4_begin[
-        ['device_group', 'device_name', 'auto', 'group_detail', 'option_detail', 'device_details_name']]
+    df_4_begin = pd.DataFrame(results_querry_region_4,
+                              columns=['device_group', 'device_name', 'auto', 'group_detail', 'option_detail',
+                                       'device_details_name'])
     df_4_sorted = df_4_begin.sort_values(by=['device_group', 'device_name'])
     column_max_list = df_4_sorted.iloc[:, 0].tolist()
     unique_list_max = list(set(column_max_list))
@@ -72,9 +59,9 @@ def region_4(results_querry_region_4, index_df_1):
         'keyword': col_keyword,
         'CADICS ID': col_CADICS_ID
     })
+    df_null_rows = df_4[df_4['auto'] == '']
 
-    df_null_rows = df_4[df_4['auto'] == 'null']
-    df_non_null_rows = df_4[df_4['auto'] != 'null']
+    df_non_null_rows = df_4[df_4['auto'] != '']
     df_non_null_deduplicated = df_non_null_rows.drop_duplicates(subset=['auto'], keep='first')
     df_4 = pd.concat([df_null_rows, df_non_null_deduplicated])
     df_4 = df_4.sort_index()
@@ -98,7 +85,7 @@ def region_6(result_querry_region6):
 def region_7(results_querry_region_7, index_df_4):
     df_7_pull_sql = pd.DataFrame(results_querry_region_7, columns=['Project', 'Config', 'Lot', 'OptionCode', 'value'])
     df_7_pull_sql.replace('', None, inplace=True)
-    print(df_7_pull_sql)
+
     df_lot_optioncode = df_7_pull_sql.pivot(index='Lot', columns='Config', values='value')
     df_lot_optioncode.reset_index(inplace=True)
     df_lot_optioncode.index = df_lot_optioncode.index + 1
@@ -106,7 +93,7 @@ def region_7(results_querry_region_7, index_df_4):
 
     df_temp_2 = df_temp_1.pivot(index='Lot', columns='Config', values='OptionCode')
     df_temp_2.reset_index(inplace=True)
-
+    # print('df_temp_2: ',df_temp_2)
     df_row_optioncode_name = df_temp_2.iloc[[0]]
     df_row_optioncode_name.at[0, 'Lot'] = 'OptionCode'
     df_7 = pd.concat([df_row_optioncode_name, df_lot_optioncode], axis=0)
@@ -123,3 +110,9 @@ def region_8(result_querry_region8):
     df_8 = df_8_version2.pivot(index=['gr', 'CADICS ID'], columns='Config', values='Value')
     df_8.reset_index(inplace=True)
     return df_8
+
+
+if __name__ == '__main__':
+    a = []
+    df = region_2(a)
+    print(df)
