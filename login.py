@@ -1,7 +1,7 @@
 import streamlit as st
 import webbrowser
 
-from src.db.function_database_new import log_in
+from src.db.funtion_database import log_in
 
 st.set_page_config(
     page_title="Login Page",
@@ -43,7 +43,7 @@ if st.session_state.button_clicked and st.session_state.position is not None:
             st.switch_page("pages/仕様表作成.py")
     with col2:
         if st.button("プロ管集約"):
-            st.switch_page("pages/仕様表作成.py")
+            st.switch_page("pages/APP PAGE.py")
 # import pandas as pd
 # import streamlit as st
 # from io import BytesIO
